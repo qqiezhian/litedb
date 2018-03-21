@@ -34,27 +34,39 @@ MemBlock::~MemBlock()
 	leftSize_ = 0;
 }
 
-Value MemBlock::put(Value& v)
+Value* MemBlock::put(Value* v)
 {
-    size_t len = v.size();
-    char* data = v.data();
+    size_t len = v->size_ + sizeof(uint32);
+    char* data = v->data_;
     
     if (0 == len || NULLPTR == data)
-		return Value();
+		return NULLPTR;
 	
 	if (len > leftSize_)
-		return Value();
+		return NULLPTR;
 
 	char* ptr = curPtr_;
 
-	*(uint*)curPtr_ = len;
-	curPtr_ += sizeof(uint);
-	
-	memcpy(curPtr_, data, len);
+	memcpy(curPtr_, v, len);
 
 	curPtr_ += len;
 	leftSize_ -= len;
 	
-	return Value(len,ptr);
+	return (Value*)ptr;
+}
+
+uint64* MemBlock::putSeq(uint64 seq)
+{
+	if (sizeof(uint64) > leftSize_)
+		return NULLPTR;
+
+	char* ptr = curPtr_;
+
+	*(uint64*)ptr = seq;
+
+	curPtr_ += sizeof(uint64);
+	leftSize_ -= sizeof(uint64);
+	
+	return (uint64*)ptr;
 }
 

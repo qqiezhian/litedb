@@ -7,43 +7,45 @@
 using namespace std;
 namespace litedb {
 
-class Slice {
-
-private:
-	size_t size_;
-	char* data_;
-public:
-	Slice() : size_(0), data_((char*)""){}
-	Slice(char* d) {size_ = strlen(d); data_ = d; }
-	Slice(size_t s, char* d) : size_(s), data_(d){}
-	bool empty() {return 0 == size_;}
-	size_t size() {return size_;}
-	char* data() {return data_;}
-	int compare(Slice &s);
-	bool operator<(Slice& s) {return (0 > compare(s));}
-	bool operator>(Slice& s) {return (0 < compare(s));}
-	bool operator==(Slice& s) {return (0 == compare(s));}
-	void print();
-};
-
-inline int Slice::compare(Slice &s)
-{
-	if (size_ < s.size())
-		return -1;
-	else if (size_ > s.size())
-		return 1;
-	return strncmp(data_,s.data(),size_);
-}
-
-inline void Slice::print()
-{
-	char tmp[10];
-	strncpy(tmp, data_, size_);
-	tmp[size_] ='\0';
-	cout << "key len:" <<size_<<", key:"<<tmp<<endl;
-}
+typedef struct {
+	uint32 size_;
+	char data_[0];
+}Slice;
 
 typedef Slice Key;
 typedef Slice Value;
+
+//Slice* constructSlice(char* s);
+//bool empty(Slice* s);
+//int sliceCompare(Slice* a, Slice* b);
+
+
+inline Slice* constructSlice(char* s)
+{
+    Slice* p;
+	uint len = strlen(s);
+	
+	p = (Slice*)new(nothrow) char[sizeof(uint32) + len];
+	if (NULL == p) return NULL;
+
+	*(uint32*)p = len;
+	
+	strncpy(p->data_, s, len);
+	return p;
+}
+
+inline bool empty(Slice* s)
+{
+    return 0 == s->size_;
+}
+
+inline int sliceCompare(Slice* a, Slice* b)
+{
+    if (a->size_ < b->size_)
+		return -1;
+	else if (a->size_ > b->size_)
+		return 1;
+	return strncmp(a->data_,b->data_,a->size_);
+}
 
 }

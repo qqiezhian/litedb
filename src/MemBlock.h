@@ -19,6 +19,9 @@ public:
 	MemBlock(size_t s);
 	~MemBlock();
 	uint size() {return size_;}
-	Slice put(Slice& s); 
+	uint activeSize() {return size_ - leftSize_;}
+	char* getMemBlock() {return ptr_;}
+	Slice* put(Slice* s);
+	uint64* putSeq(uint64 seq);
 };
 }
