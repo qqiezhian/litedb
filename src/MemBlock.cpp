@@ -33,7 +33,16 @@ MemBlock::~MemBlock()
 	size_ = 0;
 	leftSize_ = 0;
 }
-
+void MemBlock::clean()
+{
+    curPtr_ = ptr_;
+    leftSize_ = size_;
+    memset(ptr_, 0, size_);
+}
+bool MemBlock::canInsert(uint32 len)
+{
+    return (leftSize_ >= len);
+}
 Value* MemBlock::put(Value* v)
 {
     size_t len = v->size_ + sizeof(uint32);

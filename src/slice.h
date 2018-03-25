@@ -18,6 +18,18 @@ typedef Slice Value;
 //Slice* constructSlice(char* s);
 //bool empty(Slice* s);
 //int sliceCompare(Slice* a, Slice* b);
+inline Slice* constructSlice(uint32 len, char* s)
+{
+    Slice* p;
+	
+	p = (Slice*)new(nothrow) char[sizeof(uint32) + len];
+	if (NULL == p) return NULL;
+
+	*(uint32*)p = len;
+	
+	strncpy(p->data_, s, len);
+	return p;
+}
 
 
 inline Slice* constructSlice(char* s)
@@ -46,6 +58,21 @@ inline int sliceCompare(Slice* a, Slice* b)
 	else if (a->size_ > b->size_)
 		return 1;
 	return strncmp(a->data_,b->data_,a->size_);
+}
+
+inline bool isGreater(Slice* a, Slice* b)
+{
+    return (0 < sliceCompare(a,b));
+}
+
+inline bool isLesser(Slice* a, Slice* b)
+{
+    return (0 > sliceCompare(a,b));
+}
+
+inline bool isEqual(Slice* a, Slice* b)
+{
+    return (0 == sliceCompare(a,b));
 }
 
 }

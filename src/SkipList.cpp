@@ -5,7 +5,7 @@
 using namespace std;
 using namespace litedb;
 
-SkipList::SkipList(uint maxLevel):mem_(MAX_MEM_SIZE),seq_(0)
+SkipList::SkipList(uint maxLevel):mem_(MAX_MEM_SIZE),seq_(0),len_(0)
 {
     MAX_LEVEL = maxLevel;
 	head = new SkipListNode();
@@ -18,6 +18,12 @@ SkipList::SkipList(uint maxLevel):mem_(MAX_MEM_SIZE),seq_(0)
 
 SkipList::~SkipList()
 {
+    clean();
+	delete head;
+	delete tail;
+}
+void SkipList::clean()
+{
     SkipListNode* curNode;
 
 	curNode = head->next_nodes[0];
@@ -29,40 +35,59 @@ SkipList::~SkipList()
 		curNode = head->next_nodes[0];
 	}
 	delete head->next_nodes;
-	delete head;
-	delete tail;
+
+	mem_.clean();
+	len_ = 0;
+}
+bool SkipList::canInsert(Key* key, Value* data)
+{
+    uint32 len = sizeof(Key) + key->size_ 
+		    + sizeof(uint64) + sizeof(data) + data->size_;
+    
+    return mem_.canInsert(len);
 }
 
-void SkipList::insertNode(Key* key, Value* value)
-{
-	SkipListNode* tmp;
 
+bool SkipList::insertNode(Key* key, Value* value)
+{
+	uint32 activeSize;
+	SkipListNode* tmp;
     SkipListNode* update[MAX_LEVEL];
     SkipListNode* curNode = head;
 
     for (int i = MAX_LEVEL - 1; i >= 0; i--)
     {
-        while(curNode->next_nodes[i] != tail && 0 < sliceCompare(curNode->next_nodes[i]->key, key))
+        while(curNode->next_nodes[i] != tail && isLesser(curNode->next_nodes[i]->key, key))
             curNode = curNode->next_nodes[i];
-        if (curNode->next_nodes[i] != tail && 0 == sliceCompare(curNode->next_nodes[i]->key, key))
+        if (curNode->next_nodes[i] != tail && isEqual(curNode->next_nodes[i]->key, key))
         {
 	        tmp = curNode->next_nodes[i];
-            *(tmp->seqNumber) = (uint64)(((uint64)KTYPE_DELETE) << KTYPE_BIT | (*(tmp->seqNumber) & SEQ_MASK));
-            
+            modSeqType(KTYPE_DELETE,tmp->seqNumber);
 	        tmp->key = mem_.put(key);
-	        tmp->seqNumber = mem_.putSeq(((uint64)KTYPE_INSERT) << KTYPE_BIT | ++seq_);
+	        tmp->seqNumber = mem_.putSeq(getSeqNum(KTYPE_INSERT));
             tmp->data = mem_.put(value);
-            return;
+            return true;
         }
         update[i] = curNode;
     }
+    len_ += sizeof(Key) + key->size_ + sizeof(uint64) + sizeof(Value) + value->size_;
+    activeSize = mem_.activeSize();
 
     // construct skiplistnode
     SkipListNode* node = new SkipListNode;
     node->key = mem_.put(key);
-    node->seqNumber = mem_.putSeq(((uint64)KTYPE_INSERT) << KTYPE_BIT | ++seq_);
+    node->seqNumber = mem_.putSeq(getSeqNum(KTYPE_INSERT));
     node->data = mem_.put(value);
     node->level = RandomLevel();
+    node->isMeta = false;
+	//set meta data index
+	if (len_ > META_BLOCK_SIZE)
+	{
+		cout<<"meta node, seqNum:"<<*node->seqNumber<<endl;
+	    node->isMeta = true;
+	    node->offset = activeSize;
+	    len_ = 0;
+    }
     node->next_nodes = new SkipListNode* [node->level + 1];
 
     for (uint i=0; i<= node->level; i++)
@@ -71,7 +96,7 @@ void SkipList::insertNode(Key* key, Value* value)
         update[i]->next_nodes[i] = node;
     }
 
-    return;
+    return true;
 }
 
 Value* SkipList::getData(Key* key)
@@ -80,9 +105,12 @@ Value* SkipList::getData(Key* key)
 
     for (int i = MAX_LEVEL - 1; i >= 0; i--)
     {
-        while(curNode->next_nodes[i] != tail && 0 < sliceCompare(curNode->next_nodes[i]->key, key))
+        while(curNode->next_nodes[i] != tail 
+	        && isLesser(curNode->next_nodes[i]->key, key))
             curNode = curNode->next_nodes[i];
-        if (curNode->next_nodes[i] != tail && 0 == sliceCompare(curNode->next_nodes[i]->key, key))
+        if (curNode->next_nodes[i] != tail 
+	        && isEqual(curNode->next_nodes[i]->key, key)
+	        && KTYPE_INSERT == getSeqType(*(curNode->next_nodes[i]->seqNumber)))
         {
             return curNode->next_nodes[i]->data;
         }
@@ -99,9 +127,9 @@ void SkipList::deleteNode(Key* key)
 
     for (int i = MAX_LEVEL - 1; i >= 0; i--)
     {
-        while(curNode->next_nodes[i] != tail && 0 < sliceCompare(curNode->next_nodes[i]->key, key))
+        while(curNode->next_nodes[i] != tail && isLesser(curNode->next_nodes[i]->key, key))
             curNode = curNode->next_nodes[i];
-        if (curNode->next_nodes[i] != tail && 0 == sliceCompare(curNode->next_nodes[i]->key, key))
+        if (curNode->next_nodes[i] != tail && isEqual(curNode->next_nodes[i]->key, key))
         {
             update[i] = curNode;
         }
@@ -110,8 +138,16 @@ void SkipList::deleteNode(Key* key)
             update[i] = NULL;
         }
     }
-    SkipListNode* tmp;
-    for (uint i = 0; i < MAX_LEVEL; i++)
+    //no need to delete node in 0 level
+    SkipListNode* tmp = update[0]->next_nodes[0];
+    if (NULL != tmp)
+    {
+	    modSeqType(KTYPE_DELETE,tmp->seqNumber);
+        //delete tmp->next_nodes;
+        //delete tmp;
+    }
+    
+    for (uint i = 1; i < MAX_LEVEL; i++)
     {
         if (NULL != update[i])
         {
@@ -119,13 +155,7 @@ void SkipList::deleteNode(Key* key)
             update[i]->next_nodes[i] = tmp->next_nodes[i];
         }
     }
-
-    if (NULL != tmp)
-    {
-	    *(tmp->seqNumber) = (((uint64)KTYPE_DELETE) << KTYPE_BIT | (*(tmp->seqNumber) & SEQ_MASK));
-        delete tmp->next_nodes;
-        delete tmp;
-    }
+    
     return;
 }
 
@@ -178,68 +208,126 @@ bool SkipList::write2File(char* fileName)
     if (NULL == mem_.getMemBlock())
         return false;
     uint32 len = 0;
+    uint32 metaLen = 0;
+    uint32 metaIdx = 0;
+    char endFlag[sizeof(uint32)];
     char* ptr;
+    char* metaPtr;
     ofstream fout;
+
+    *(uint32*)endFlag = 0xffffffff;
     fout.open(fileName, ios::binary);
 
     SkipListNode* curNode = head->next_nodes[0];
     while(tail != curNode)
     {
+        if (curNode->isMeta)
+        {
+	        //meta data index
+            metaLen += sizeof(uint32) + sizeof(Key) + curNode->key->size_;
+        }
         len = sizeof(uint32) + curNode->key->size_
 	        + sizeof(uint64) + sizeof(uint32) + curNode->data->size_;
         ptr = (char*)curNode->key;
         fout.write(ptr,len);
         curNode = curNode->next_nodes[0];
     }
-    //fout.write(mem_.getMemBlock(), mem_.activeSize());
+    fout.write(endFlag,sizeof(uint32));
+    
+    //index of meta data index
+    metaIdx = mem_.activeSize() + sizeof(uint32);//endFlag length
+    metaLen += sizeof(uint32) + sizeof(uint32);
+    
+    metaPtr = new(nothrow) char[metaLen];
+    ptr = metaPtr;
+    curNode = head->next_nodes[0];
+    while(tail != curNode)
+    {
+	    if (curNode->isMeta)
+	    {
+	        *(uint32*)ptr = curNode->offset;
+	        ptr += sizeof(uint32);
+	        memcpy(ptr, (char*)curNode->key, sizeof(Key) + curNode->key->size_);
+	        ptr += sizeof(Key) + curNode->key->size_;
+        }
+        curNode = curNode->next_nodes[0];
+    }
+    *(uint32*)ptr = *(uint32*)endFlag;
+    ptr += sizeof(uint32);
+    *(uint32*)ptr = metaIdx;
+    fout.write(metaPtr,metaLen);
     fout.close();
     return true;
 }
 
-/*
+
 bool SkipList::readFile(char* fileName)
 {
     if (NULL == fileName)
         return false;
-    if (NULL != mem_.getMemBlock())
-        return false;
-    SkipListNode* tmp;
-    Key key;
-    Value value;
-    char* ptr;
+    uint32 metaOffset = 0;
+    uint32 offset = 0;
+    uint32 num = 0;
+    uint32 len = 0;
+    char ptr[sizeof(uint32)];
+    char seqNum[sizeof(uint64)];
+    char outStr[20] = {0};
     ifstream fin;
-    fin.open(fileName, ios::binary);
+    fin.open(fileName, ios::binary | ios::ate);
 
+    fin.seekg(-4,ios::end);
+    fin.read(ptr,sizeof(uint32));
+    metaOffset = *(uint32*)ptr;
+    cout<<"meta info index offset:"<<metaOffset<<endl;
+    fin.seekg(metaOffset, ios::beg);
+    cout<<"meta info index:"<<endl;
     while (!fin.eof())
     {
-        ptr = mem_.curPtr_;
-        fin.read(ptr, sizeof(key.size_));
-        key.size_ = *(uint32*)ptr;
-        ptr += sizeof(key.size_);
-
-        fin.read(ptr, key.size_);
-        key.data_ = ptr;
-        ptr += key.size_;
-
-
-        fin. read(ptr, sizeof(value.size_));
-        value.size_ = *(uint32*)ptr;
-        ptr += sizeof(value.size_);
-
-        fin.read(ptr, value.size_);
-        value.data_ = ptr;
-        ptr += value.size_;
+        fin.read(ptr, sizeof(uint32));
+        offset = *(uint32*)ptr;
+        if (offset == 0xffffffff)
+            break;
         
-        mem_.curPtr_ = ptr;
-        mem_.leftSize_ -= sizeof(key.size_) + key.size_ + sizeof(value.size_) + value.size_;
+        cout<<"key offset:"<<offset<<endl;
+        fin.read(ptr, sizeof(uint32));
+        len = *(uint32*)ptr;
+        cout<<"key size:"<<len<<endl;
 
+        fin.read(outStr, len);
+        outStr[len] = '\0';
+        cout<<"key data:"<<outStr<<endl;
         
     }
-    
-    //fin.write(mem_.getMemBlock(), mem_.activeSize());
-    fin.close();
+    fin.seekg(0, ios::beg);
+    cout<<"data info:"<<endl;
+    while (!fin.eof())
+    {
+        fin.read(ptr, sizeof(uint32));
+        len = *(uint32*)ptr;
+        if (len == 0xffffffff)
+            break;
+        cout<<"key size:"<<len<<endl;
+        
+        fin.read(outStr, len);
+        outStr[len] = '\0';
+        cout<<"key data:"<<outStr<<endl;
 
+		fin.read(seqNum, sizeof(uint64));
+		cout<<"seq Num:"<<*(uint64*)seqNum<<endl;
+
+        fin.read(ptr, sizeof(uint32));
+        len = *(uint32*)ptr;
+        cout<<"data size:"<<len<<endl;
+        
+        fin.read(outStr, len);
+        outStr[len] = '\0';
+        cout<<"data data:"<<outStr<<endl;
+
+        num++;
+    }
+    cout<<"num:"<<num<<endl;
+    fin.close();
     
     return true;
 }
-*/
+
